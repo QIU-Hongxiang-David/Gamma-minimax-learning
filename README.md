@@ -1,4 +1,4 @@
-# Gamma-minimax-learninng
+# Gamma-minimax-learning
 
 Simulation code for "Leveraging vague prior information in general models via iteratively constructed Gamma-minimax estimators".
 
