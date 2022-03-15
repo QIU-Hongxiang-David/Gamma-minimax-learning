@@ -1,6 +1,6 @@
 # Gamma-minimax-learning
 
-Simulation code for "Leveraging vague prior information in general models via iteratively constructed Gamma-minimax estimators".
+Simulation code for "Constructing Gamma-minimax estimators to leverage vague prior information".
 
 Folders with name starting with "univariate_mean" correspond to the simulation on estimating the mean. `univariate_mean/` corresponds to the space of all linear decisions and SGDmax. `univariate_mean_fictitious_play/` corresponds to the space of all linear decisions and fictitious play. `univariate_mean_skn` and `univariate_mean_nn` correspond to statistical knowledge networks and more naive neural networks learned with SGDmax, respectively.
 
