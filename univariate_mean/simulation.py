@@ -10,6 +10,9 @@ import pickle
 torch.set_default_tensor_type(torch.DoubleTensor)
 # torch.set_default_tensor_type(torch.cuda.DoubleTensor)
 
+
+# functions and classes for estimators and Gamma-minimax estimators
+
 def init_generate_distr(support, n_random_distr, new_support_index=None):
     '''support: a 1D tensor with support points
     n_random_distr: number of random distributions to be generated (besides point masses at support points)
@@ -353,6 +356,7 @@ def ub_constraint_fun(support, distribution):
 def Risk_fun(estimates, true_parameters):
     return torch.sum((estimates - true_parameters)**2, dim=2).mean(dim=1)
 
+# hyperparameters and initialize
 torch.manual_seed(893)
 np.random.seed(5784)
 
@@ -360,21 +364,22 @@ estimator = Linear_mean_estimator()
 Prior_Risk_Constraint_object = Prior_Risk_Constraint(support=torch.tensor([0., 1.]), parameter=parameter, eq_constraint_fun=parameter, Risk_fun=Risk_fun)
 b_eq = np.array([0.3])
 
+# compute Gamma-minimax estimator
 result = calc_Gamma_minimax_estimator(estimator, Prior_Risk_Constraint_object, b_eq=b_eq)
 
-#save result
+# save Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "wb") as saved_file:
     pickle.dump({"estimator": estimator, "result": result, "Prior_Risk_Constraint_object": Prior_Risk_Constraint_object}, saved_file)
 
-#load result
+# load Gamma-minimax estimator
 with open("minimax_estimator.pkl", "rb") as saved_file:
     results = pickle.load(saved_file)
 result = results["result"]
 estimator = results["estimator"]
 Prior_Risk_Constraint_object = results["Prior_Risk_Constraint_object"]
 
-
+# theoretical Gamma-minimax estimator
 mu = b_eq[0]
 n = 10
 theoretical_parameters = np.array([mu/(1+np.sqrt(n)),np.sqrt(n)/(1+np.sqrt(n))])
@@ -382,7 +387,7 @@ print(theoretical_parameters)
 print(list(estimator.named_parameters()))
 theoretical_estimator = Linear_mean_estimator(theoretical_parameters)
 
-
+# simulation to estimate worst-case Bayes risks
 torch.manual_seed(893)
 np.random.seed(5784)
 Beta_prior = Prior_Risk_Constraint(support=torch.tensor([0., 1.]), parameter=parameter, eq_constraint_fun=parameter, Risk_fun=Risk_fun)

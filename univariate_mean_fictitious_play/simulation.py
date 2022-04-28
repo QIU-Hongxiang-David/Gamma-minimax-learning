@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 torch.set_default_tensor_type(torch.DoubleTensor)
 # torch.set_default_tensor_type(torch.cuda.DoubleTensor)
 
+
+# functions and classes for estimators and Gamma-minimax estimators
 def init_generate_distr(support, n_random_distr, new_support_index=None):
     '''support: a 1D tensor with support points
     n_random_distr: number of random distributions to be generated (besides point masses at support points)
@@ -343,24 +345,28 @@ def parameter(support, distribution):
 def Risk_fun(estimates, true_parameters):
     return torch.sum((estimates - true_parameters)**2, dim=2).mean(dim=1)
 
+# hyperparameter
 b_eq = np.array([0.3])
 
 
-
+# initialize
 torch.manual_seed(893)
 np.random.seed(5784)
 
 estimator_coef = torch.as_tensor((0., 1.))
 Prior_Risk_Constraint_object = Prior_Risk_Constraint(support=torch.tensor([0., 1.]), parameter=parameter, eq_constraint_fun=parameter, Risk_fun=Risk_fun)
 
+# compute Gamma-minimax estimator
 result = calc_Gamma_minimax_estimator(estimator_coef, Prior_Risk_Constraint_object, b_eq=b_eq)
 
 estimator_coef = result[0]
 
+# save Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "wb") as saved_file:
     pickle.dump({"result": result, "Prior_Risk_Constraint_object": Prior_Risk_Constraint_object}, saved_file)
 
+# load Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "rb") as saved_file:
     results = pickle.load(saved_file)
@@ -368,14 +374,14 @@ result = results["result"]
 estimator_coef = result[0]
 Prior_Risk_Constraint_object = results["Prior_Risk_Constraint_object"]
 
-
+# theoretical Gamma-minimax estimator
 mu = b_eq[0]
 n = 10
 theoretical_coef = torch.as_tensor([mu/(1+np.sqrt(n)),np.sqrt(n)/(1+np.sqrt(n))])
 print(theoretical_coef)
 print(estimator_coef)
 
-
+# simulation to estimate worst-case Bayes risks
 torch.manual_seed(893)
 np.random.seed(5784)
 Beta_prior = Prior_Risk_Constraint(support=torch.tensor([0., 1.]), parameter=parameter, eq_constraint_fun=parameter, Risk_fun=Risk_fun)

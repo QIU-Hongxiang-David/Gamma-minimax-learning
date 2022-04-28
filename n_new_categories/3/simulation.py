@@ -21,6 +21,9 @@ else:
 sample_size = 100
 new_sample_size = 200
 
+
+# functions and classes for estimators and Gamma-minimax estimators
+
 def sufficient_statistic(multinomial_sample):
     global sample_size
     return np.bincount(multinomial_sample, minlength=sample_size + 1)[1:]
@@ -471,6 +474,7 @@ class nnet_estimator(torch.nn.Module):
 
 
 
+# initialize grid
 pseudo_prior_mean = 47.5
 b_eq = np.array([pseudo_prior_mean])
 b_ub = np.array([-.95, 60., -35.])
@@ -486,12 +490,15 @@ p_init = torch.cat((torch.ones(100), torch.ones(25) * 2, torch.ones(9) * 3, torc
 p_init /= p_init.sum()
 Gamma_minimax_Problem_object=Gamma_minimax_Problem(estimator=estimator, parameter_constraint_fun=parameter_constraint_fun, b_ub=b_ub, Risk_fun=Risk_fun, parameter=parameter, p_init=p_init)
 
+# compute Gamma-minimax estimator
 result = Gamma_minimax_Problem_object.calc_Gamma_minimax_estimator()
 
+# save Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "wb") as saved_file:
     pickle.dump({"Gamma_minimax_Problem_object":Gamma_minimax_Problem_object, "result":result}, saved_file)
 
+# load Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "rb") as saved_file:
     results = pickle.load(saved_file)
@@ -506,7 +513,7 @@ plt.plot(result[2][0])
 
 list(estimator.named_parameters())
 
-#resample simulation
+#resample simulation to estimate worst-case Bayes risks and Risks
 torch.manual_seed(5678934)
 np.random.seed(2758)
 data = torch.cat((torch.ones(61) * 1, torch.ones(35) * 2, torch.ones(18) * 3, torch.ones(12) * 4, torch.ones(15) * 5, torch.ones(4) * 6, torch.ones(8) * 7, torch.ones(4) * 8, torch.ones(5) * 9, torch.ones(5) * 10, torch.ones(1) * 11, torch.ones(2) * 12, torch.ones(1) * 13, torch.ones(2) * 14, torch.ones(3) * 15, torch.ones(2) * 16, torch.ones(1) * 19, torch.ones(2) * 20, torch.ones(1) * 22, torch.ones(1) * 29, torch.ones(1) * 32, torch.ones(1) * 40, torch.ones(1) * 43, torch.ones(1) * 48, torch.ones(1) * 67))

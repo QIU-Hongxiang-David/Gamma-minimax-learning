@@ -21,6 +21,8 @@ else:
 
 sample_size = 100
 
+# functions and classes for estimators and Gamma-minimax estimators
+
 def sufficient_statistic(multinomial_sample):
     global sample_size
     return np.bincount(multinomial_sample, minlength=sample_size + 1)[1:]
@@ -504,13 +506,14 @@ class nnet_estimator(torch.nn.Module):
         return self.output(hidden2_aug)
 
 
-
+# hyperparameters
 pseudo_prior_mean = 4.5
 b_ub = np.array([-.95, 4.7, -4.3])
 prior_credible_range = torch.tensor([4., 5.])
 MCMC_normal_distribution = torch.distributions.normal.Normal(torch.tensor(pseudo_prior_mean), torch.as_tensor((prior_credible_range[1] - prior_credible_range[0]) * .5 / torch.distributions.normal.Normal(torch.tensor(0.), torch.tensor(1.)).icdf(torch.tensor(.975))))
 MCMC_negbinomial_distribution = torch.distributions.negative_binomial.NegativeBinomial(torch.tensor(2.), torch.tensor(.995))
 
+# initialize grid
 torch.manual_seed(893)
 np.random.seed(5784)
 
@@ -523,12 +526,15 @@ plt.plot([len(x) for x in Gamma_minimax_Problem_object.distrs])
 
 plt.plot(Gamma_minimax_Problem_object.true_parameters.squeeze(1).cpu())
 
+# compute Gamma-minimax estimator
 result = Gamma_minimax_Problem_object.calc_Gamma_minimax_estimator()
 
+# save Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "wb") as saved_file:
     pickle.dump({"Gamma_minimax_Problem_object":Gamma_minimax_Problem_object, "result":result}, saved_file)
 
+# load Gamma-minimax estimator
 import pickle
 with open("minimax_estimator.pkl", "rb") as saved_file:
     results = pickle.load(saved_file)
@@ -544,7 +550,7 @@ plt.plot(result[2][0])
 list(estimator.named_parameters())
 
 
-#resample simulation
+#resample simulation to estimate worst-case Bayes risks and Risks
 torch.manual_seed(5678934)
 np.random.seed(2758)
 data = torch.cat((torch.ones(61) * 1, torch.ones(35) * 2, torch.ones(18) * 3, torch.ones(12) * 4, torch.ones(15) * 5, torch.ones(4) * 6, torch.ones(8) * 7, torch.ones(4) * 8, torch.ones(5) * 9, torch.ones(5) * 10, torch.ones(1) * 11, torch.ones(2) * 12, torch.ones(1) * 13, torch.ones(2) * 14, torch.ones(3) * 15, torch.ones(2) * 16, torch.ones(1) * 19, torch.ones(2) * 20, torch.ones(1) * 22, torch.ones(1) * 29, torch.ones(1) * 32, torch.ones(1) * 40, torch.ones(1) * 43, torch.ones(1) * 48, torch.ones(1) * 67))
