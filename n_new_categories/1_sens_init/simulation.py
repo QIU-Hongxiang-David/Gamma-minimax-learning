@@ -2,7 +2,6 @@ import numpy as np
 from numpy.random import uniform
 from scipy.optimize import linprog
 from scipy.stats import binom
-import scipy.io as sio
 import torch
 import matplotlib.pyplot as plt
 import pickle
@@ -19,7 +18,8 @@ else:
     torch.set_default_tensor_type(torch.DoubleTensor)
 
 
-sample_size = 1008
+sample_size = 100
+new_sample_size = 200
 
 
 # functions and classes for estimators and Gamma-minimax estimators
@@ -115,75 +115,66 @@ class Gamma_minimax_Problem(object):
 
         return np_A_ub, np_A_eq
     
-    def draw_sample(self, n_sample, distributions=None, distr_indices=None):
-        '''returns a 3D tensor (number of distributions X number of samples X sample_size). when distributions = None, use the distributions in the object. distr_indices is the indices in distributions for which samples are to be drawn; when distr_indices=None, draw samples for all distributions'''
+    def draw_sample(self, n_sample, distributions=None):
+        '''returns a 3D tensor (number of distributions X number of samples X sample_size). when distributions = None, use the distributions in the object'''
         global sample_size, default_dtype
         if distributions is None:
             distributions = self.distrs
-        if distr_indices is None:
-            distr_indices = range(len(distributions))
-        n_distr = len(distr_indices)
-        samples = torch.empty((n_distr, n_sample, sample_size))
-        for i, p_index in enumerate(distr_indices):
-            p = distributions[p_index]
+        samples = torch.empty((len(distributions), n_sample, sample_size))
+        for i, p in enumerate(distributions):
             #work on CPU so that numpy functions can be used
             multinomial_samples = torch.distributions.Multinomial(sample_size, p.cpu()).sample((n_sample,)).type(torch.int64)
             sufficient_stats = np.apply_along_axis(sufficient_statistic, 1, multinomial_samples)
             samples[i,:,:] = torch.as_tensor(sufficient_stats, dtype=default_dtype)
         return samples
-
+    
     def calc_Risks_tensor(self, n_sample=30, estimator=None, distributions=None, distr_indices=None):
-        '''calculate Risks of distributions and estimator via Monte Carlo. when estimator = None, use the current estimator in the object. when distributions = None, use the distributions in the object. distr_indices is the indices in distributions for which Risks are to be calculated; when distr_indices=None, calculate Risks for all distributions'''
-        if estimator is None:
-            estimator = self.estimator
-        
+        '''calculate Risks of distributions and estimator via Monte Carlo. when estimator=None, use the current estimator in the object. when distributions=None, use the distributions in the object. distr_indices is the indices in distributions for which Risks are to be calculated; when distr_indices=None, calculate Risks for all distributions'''
+        global sample_size, new_sample_size, default_dtype
         if distributions is None:
             distributions = self.distrs
-            if self.true_parameters is None or len(distributions) != len(self.distrs):
-                self.eval_parameter_constraint()
-            true_parameters = self.true_parameters.unsqueeze(1).expand(-1, n_sample, -1)
-        else:
-            true_parameters = self.parameter(distributions)
-            true_parameters = true_parameters.unsqueeze(1).expand(-1, n_sample, -1)
-        
+        if estimator is None:
+            estimator = self.estimator
         if distr_indices is None:
             distr_indices = range(len(distributions))
         n_distr = len(distr_indices)
-
-        samples = self.draw_sample(n_sample=n_sample, distributions=distributions, distr_indices=distr_indices)
-        
+        samples = torch.empty((n_distr, n_sample, sample_size))
+        true_prediction_mean = torch.empty((n_distr, n_sample, 1))
+        for i, p_index in enumerate(distr_indices):
+            p = distributions[p_index]
+            #work on CPU so that numpy functions can be used
+            multinomial_samples = torch.distributions.Multinomial(sample_size, p.cpu()).sample((n_sample,))
+            sufficient_stats = np.apply_along_axis(sufficient_statistic, 1, multinomial_samples.type(torch.int64))
+            samples[i,:,:] = torch.as_tensor(sufficient_stats, dtype=default_dtype)
+            prob_occur_new_sample = 1. - (1. - p) ** new_sample_size
+            true_prediction_mean[i,:,:] = (multinomial_samples == 0).type(default_dtype).mm(prob_occur_new_sample.unsqueeze(1).cpu())
         estimates = estimator(samples.reshape(n_distr*n_sample, -1)).view(n_distr, n_sample, -1)
-        Risks = self.Risk_fun(estimates, true_parameters[distr_indices])
+        Risks = self.Risk_fun(estimates, true_prediction_mean)
         return Risks
-
+    
     def calc_Risks_tensor_memeff(self, n_sample=2000, estimator=None, distributions=None, distr_indices=None):
         '''memory efficient version of Gamma_minimax_Problem.calc_Risks_tensor. may be slower and have trouble when used with autograd. may be preferrable when evaluating Risk or Bayes risk with a large number of distributions and large n_sample'''
-        global sample_size, default_dtype
-        if estimator is None:
-            estimator = self.estimator
-        
+        global sample_size, new_sample_size, default_dtype, use_cuda
         if distributions is None:
             distributions = self.distrs
-            if self.true_parameters is None or len(distributions) != len(self.distrs):
-                self.eval_parameter_constraint()
-            true_parameters = self.true_parameters.unsqueeze(1).expand(-1, n_sample, -1)
-        else:
-            true_parameters = self.parameter(distributions)
-            true_parameters = true_parameters.unsqueeze(1).expand(-1, n_sample, -1)
-        
+        if estimator is None:
+            estimator = self.estimator
         if distr_indices is None:
             distr_indices = range(len(distributions))
         n_distr = len(distr_indices)
-
         Risks = torch.empty(n_distr)
         for i, p_index in enumerate(distr_indices):
             p = distributions[p_index]
             #work on CPU so that numpy functions can be used
-            multinomial_samples = torch.distributions.Multinomial(sample_size, p.cpu()).sample((n_sample,)).type(torch.int64)
-            sufficient_stats = np.apply_along_axis(sufficient_statistic, 1, multinomial_samples)
+            multinomial_samples = torch.distributions.Multinomial(sample_size, p.cpu()).sample((n_sample,))
+            sufficient_stats = np.apply_along_axis(sufficient_statistic, 1, multinomial_samples.type(torch.int64))
             samples = torch.as_tensor(sufficient_stats, dtype=default_dtype).unsqueeze(0)
+            prob_occur_new_sample = 1. - (1. - p) ** new_sample_size
+            true_prediction_mean = torch.as_tensor((multinomial_samples == 0).type(default_dtype).mm(prob_occur_new_sample.unsqueeze(1).cpu())).unsqueeze(0)
+            if use_cuda:
+                true_prediction_mean = true_prediction_mean.cuda()
             estimates = estimator(samples.reshape(n_sample, -1)).view(1, n_sample, -1)
-            Risks[i] = self.Risk_fun(estimates, true_parameters[p_index])
+            Risks[i] = self.Risk_fun(estimates, true_prediction_mean)
         return Risks
     
     def log_pseudo_prior(self, p):
@@ -281,8 +272,7 @@ class Gamma_minimax_Problem(object):
         risk_lower = []
         risk_upper = []
         if optimizer is None:
-            optimizer = torch.optim.SGD(self.estimator.parameters(), lr=0.001)
-        # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 1/(epoch+2))
+            optimizer = torch.optim.SGD(self.estimator.parameters(), lr=0.005)
 
         np_A_ub, np_A_eq = self.get_constraint_matrices()
 
@@ -305,9 +295,7 @@ class Gamma_minimax_Problem(object):
 
         optimizer.zero_grad()
         risk.backward()
-        # torch.nn.utils.clip_grad_norm_(self.estimator.parameters(), 1)
         optimizer.step()
-        # scheduler.step()
 
         for _ in range(n_iter):
             with torch.no_grad():
@@ -325,15 +313,13 @@ class Gamma_minimax_Problem(object):
             risk_upper.append(risk.item())
             optimizer.zero_grad()
             risk.backward()
-            # torch.nn.utils.clip_grad_norm_(self.estimator.parameters(), 1)
             optimizer.step()
-            # scheduler.step()
 
         return (np.array(risk_lower), np.array(risk_upper))
     
     def calc_Gamma_minimax_estimator(self, n_SGDmax_iter=200, max_enlarge_iter=10, optimizer=None, n_SGDmax_sample=30, n_accurate_Risk_sample=2000, tol=1e-4, relative_tol=0.02, n_new_distr=1000, save_SGDmax_result=True):
         '''calculate the Gamma-minimax estimator; estimator and prior are updated in place. returns a tuple of (1) status where 0 means success and 1 means divergence (2) list of "lower bounds" of Gamma_l-minimax risk from SGDmax (3) list of "upper bounds" of Gamma_l-minimax risk from SGDmax (4) 2D array of estimated Gamma_l-minimax risks in each iteration (indexed by l) of the old prior (1st column) and new prior (2nd column)
-        n_SGDmax_iter: number of iterations in SGDmax (use 30 X n_SGDmax_iter for the first training)
+        n_SGDmax_iter: number of iterations in SGDmax (use 20 X n_SGDmax_iter for the first training)
         max_enlarge_iter: max number of iterations to enlarge grid
         optimizer: optimizer to update estimator
         n_SGD_max_sample: number of samples drawn for each distribution to estimate Risk in SGDmax
@@ -345,9 +331,9 @@ class Gamma_minimax_Problem(object):
         risk_upper = []
         risk_iter = []
         if optimizer is None:
-            optimizer = torch.optim.SGD(estimator.parameters(), lr=0.001)
+            optimizer = torch.optim.SGD(estimator.parameters(), lr=0.005)
 
-        lower, upper = self.SGDmax(n_iter=n_SGDmax_iter * 30,use_init_prior=False, optimizer=optimizer, n_sample=n_SGDmax_sample)
+        lower, upper = self.SGDmax(n_iter=n_SGDmax_iter * 20,use_init_prior=False, optimizer=optimizer, n_sample=n_SGDmax_sample)
         if save_SGDmax_result:
             with open("l0.pkl", "wb") as saved_file:
                 pickle.dump({"estimator": estimator, "lower": lower, "upper": upper}, saved_file)
@@ -410,87 +396,62 @@ class Gamma_minimax_Problem(object):
 
 def parameter_constraint_fun(ps):
     '''parameters and eq_constraint: expected number of new species in the new sample; no ub_constraint'''
-    global prior_credible_range
+    global sample_size, new_sample_size, prior_credible_range
     output = torch.empty((len(ps), 1))
     for i, p in enumerate(ps):
-        summand = -p * torch.log(p)
-        output[i, 0] = torch.sum(summand[p != 0])
+        one_minus_p = 1 - p
+        output[i, 0] = torch.sum(one_minus_p ** sample_size * (1 - one_minus_p ** new_sample_size))
     return (output, torch.cat((-((output >= prior_credible_range[0]) & (output <= prior_credible_range[1])).type(default_dtype), output, -output), 1), None)
 
 def parameter(ps):
+    global sample_size, new_sample_size
     output = torch.empty((len(ps), 1))
     for i, p in enumerate(ps):
-        summand = -p * torch.log(p)
-        output[i, 0] = torch.sum(summand[p != 0])
+        one_minus_p = 1 - p
+        output[i, 0] = torch.sum(one_minus_p ** sample_size * (1 - one_minus_p ** new_sample_size))
     return output
 
 def Risk_fun(estimates, true_parameters):
-    return torch.sum((estimates - true_parameters) ** 2, dim=2).mean(dim=1)
+    return torch.sum((estimates - true_parameters)**2, dim=2).mean(dim=1)
 
 
-def entro_mat(x, n, g_coeff, c_1):
-    # g_coeff = {g0, g1, g2, ..., g_K}, K: the order of best polynomial approximation,
-    K = len(g_coeff) - 1
-    thres = 4 * c_1 * np.log(n) / n
-    T, X = np.meshgrid(thres, x)
-    ratio = np.minimum(np.maximum(2 * X / T - 1, 0), 1)
-    q = np.arange(K).reshape((1, 1, K))
-    g = g_coeff.reshape((1, 1, K + 1))
-    MLE = - X * np.log(X) + 1 / (2 * n)
-    polyApp = np.sum(np.concatenate((T[..., None], ((n * X)[..., None] - q) / (
-        T[..., None] * (n - q))), axis=2).cumprod(axis=2) * g, axis=2) - X * np.log(T)
-    polyfail = np.isnan(polyApp) | np.isinf(polyApp)
-    polyApp[polyfail] = MLE[polyfail]
-    output = ratio * MLE + (1 - ratio) * polyApp
-    return np.maximum(output, 0)
+class OrlitskySureshWu_Estimator(object):
+    def __init__(self,sample_size,new_sample_size):
+        t = new_sample_size/sample_size
+        weights = - (-t) ** np.arange(1, sample_size + 1)
+        if t > 1:
+            weights *= binom.sf(np.arange(sample_size), np.floor(.5*np.log(sample_size * new_sample_size / (t - 1)) / np.log(3)), 2 / (t + 2))
+        self.weights = torch.as_tensor(weights, dtype=default_dtype)
+    def __call__(self,samples):
+        return torch.sum(samples * self.weights.expand(samples.size()[0], -1), dim=1).unsqueeze(1)
 
-
-
-
-class JVHW_estimator(object):
-    def __init__(self, poly_entro=None):
-        global sample_size
-        self.n = float(sample_size)
-        self.order = min(4 + int(np.ceil(1.2 * np.log(self.n))), 22)
-        self.n_greater_than_order = self.n >= self.order
-
-        if poly_entro is None:
-            poly_entro = sio.loadmat('poly_coeff_entro.mat')['poly_entro']
-        self.coeff = poly_entro[self.order-1, 0][0]
-        self.prob = np.arange(1, sample_size + 1) / sample_size
-        self.V1 = np.array([0.3303, 0.4679])
-        self.V2 = np.array([-0.530556484842359, 1.09787328176926, 0.184831781602259])
-    
-    def __call__(self, samples):
-        f = samples.t().cpu().numpy()
-        wid = f.shape[1]
-        f1nonzero = f[0] > 0
-        c_1 = np.zeros(wid)
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            if self.n_greater_than_order and f1nonzero.any():
-                if self.n < 200:
-                    c_1[f1nonzero] = np.polyval(self.V1, np.log(self.n / f[0, f1nonzero]))
-                else:
-                    n2f1_small = f1nonzero & (np.log(self.n / f[0]) <= 1.5)
-                    n2f1_large = f1nonzero & (np.log(self.n / f[0]) > 1.5)
-                    c_1[n2f1_small] = np.polyval(self.V2, np.log(self.n / f[0, n2f1_small]))
-                    c_1[n2f1_large] = np.polyval(self.V1, np.log(self.n / f[0, n2f1_large]))
-
-                # make sure nonzero threshold is higher than 1/n
-                c_1[f1nonzero] = np.maximum(c_1[f1nonzero], 1 / (1.9 * np.log(self.n)))
-
-            prob_mat = entro_mat(self.prob, self.n, self.coeff, c_1)
-
-        # output = np.sum(f * prob_mat, axis=0) / np.log(2)
-        output = np.sum(f * prob_mat, axis=0)
-        return torch.as_tensor(output).unsqueeze(1)
-
+class ShenChaoLin_Estimator(object):
+    def __init__(self,sample_size,new_sample_size,k=10):
+        if k > sample_size:
+            raise ValueError("k must be smaller than sample size")
+        self.new_sample_size = new_sample_size
+        self.sample_size = sample_size
+        self.k = k
+    def __call__(self,samples):
+        global default_dtype
+        global b_eq
+        S_rare = torch.sum(samples[:,:self.k], dim=1)
+        n_rare = (samples[:, :self.k] @ torch.arange(1, self.k+1, dtype=default_dtype).unsqueeze(1)).squeeze(1)
+        C_tilde = 1 - samples[:,0]/n_rare
+        C_hat = 1 - samples[:,0]/self.sample_size
+        C_tilde = torch.where((C_tilde == 0) | torch.isnan(C_tilde), C_hat, C_tilde)
+        C_tilde = torch.where(C_tilde == 0, torch.ones_like(C_tilde) * 0.1, C_tilde)
+        gamma2 = S_rare / C_tilde * (samples[:, :self.k] @ (torch.arange(self.k, dtype=default_dtype) * torch.arange(1, self.k+1, dtype=default_dtype)).unsqueeze(1)).squeeze(1) / n_rare / (n_rare - 1.) - 1
+        gamma2 = torch.max(gamma2, torch.zeros_like(gamma2))
+        w = S_rare / C_tilde + samples[:, 0] / C_tilde * gamma2 - S_rare
+        w = torch.where(torch.isnan(w), torch.ones_like(w) * b_eq[0], w)
+        estimates = torch.where(w == 0, w, w * (1 - (1 - (1 - C_hat) / w) ** self.new_sample_size))
+        return estimates.unsqueeze(1)
 
 
 
 class nnet_estimator(torch.nn.Module):
-    def __init__(self, naive_estimators, naive_estimators_scale=1., init_output_params="naive mean"):
+    def __init__(self, naive_estimators, naive_estimators_scale=.02, init_output_params="naive mean"):
         '''naive_estimators_scale: initial estimates are multiplied by naive_estimators_scale before feeding to the neural net to stabilize gradients
         init_output_params: initial parameters, vector of length >=2. First component is intercept; second component is slope of previous hidden layers; other components are the slope of naive estimators. default "naive mean" takes the mean of naive_estimators. Set to None to randomized initialization.'''
         global sample_size
@@ -518,9 +479,10 @@ class nnet_estimator(torch.nn.Module):
 
 
 # hyperparameters
-pseudo_prior_mean = 4.5
-b_ub = np.array([-.95, 4.7, -4.3])
-prior_credible_range = torch.tensor([4., 5.])
+pseudo_prior_mean = 47.5
+b_eq = np.array([pseudo_prior_mean])
+b_ub = np.array([-.95, 50., -45.])
+prior_credible_range = torch.tensor([40., 55.])
 MCMC_normal_distribution = torch.distributions.normal.Normal(torch.tensor(pseudo_prior_mean), torch.as_tensor((prior_credible_range[1] - prior_credible_range[0]) * .5 / torch.distributions.normal.Normal(torch.tensor(0.), torch.tensor(1.)).icdf(torch.tensor(.975))))
 MCMC_negbinomial_distribution = torch.distributions.negative_binomial.NegativeBinomial(torch.tensor(2.), torch.tensor(.995))
 MCMC_Poisson_distribution = torch.distributions.poisson.Poisson(torch.tensor(150.))
@@ -529,14 +491,10 @@ MCMC_Poisson_distribution = torch.distributions.poisson.Poisson(torch.tensor(150
 torch.manual_seed(893)
 np.random.seed(5784)
 
-estimator = nnet_estimator((JVHW_estimator(),))
-p_init = torch.cat((torch.ones(50) * 0.5, torch.ones(100), torch.ones(40) * 2, torch.ones(30) * 3, torch.ones(20) * 4, torch.ones(15) * 5, torch.ones(10) * 6, torch.ones(10) * 7, torch.ones(10) * 8, torch.ones(8) * 9, torch.ones(8) * 10, torch.ones(12) * 13, torch.ones(8) * 15, torch.ones(5) * 20, torch.ones(2) * 30, torch.ones(2) * 40, torch.ones(2) * 50, torch.ones(1) * 70))
+estimator = nnet_estimator((OrlitskySureshWu_Estimator(sample_size, new_sample_size), ShenChaoLin_Estimator(sample_size, new_sample_size)))
+p_init = torch.cat((torch.ones(130), torch.ones(30) * 2, torch.ones(7) * 3, torch.ones(3) * 5, torch.ones(2) * 6, torch.ones(1) * 11))
 p_init /= p_init.sum()
 Gamma_minimax_Problem_object=Gamma_minimax_Problem(estimator=estimator, parameter_constraint_fun=parameter_constraint_fun, b_ub=b_ub, Risk_fun=Risk_fun, parameter=parameter, p_init=p_init)
-
-plt.plot([len(x) for x in Gamma_minimax_Problem_object.distrs])
-
-plt.plot(Gamma_minimax_Problem_object.true_parameters.squeeze(1).cpu())
 
 # compute Gamma-minimax estimator
 result = Gamma_minimax_Problem_object.calc_Gamma_minimax_estimator()
@@ -561,13 +519,13 @@ plt.plot(result[2][0])
 
 list(estimator.named_parameters())
 
-
-# estimate
+#resample simulation to estimate worst-case Bayes risks and Risks
 torch.manual_seed(5678934)
 np.random.seed(2758)
 data = torch.cat((torch.ones(61) * 1, torch.ones(35) * 2, torch.ones(18) * 3, torch.ones(12) * 4, torch.ones(15) * 5, torch.ones(4) * 6, torch.ones(8) * 7, torch.ones(4) * 8, torch.ones(5) * 9, torch.ones(5) * 10, torch.ones(1) * 11, torch.ones(2) * 12, torch.ones(1) * 13, torch.ones(2) * 14, torch.ones(3) * 15, torch.ones(2) * 16, torch.ones(1) * 19, torch.ones(2) * 20, torch.ones(1) * 22, torch.ones(1) * 29, torch.ones(1) * 32, torch.ones(1) * 40, torch.ones(1) * 43, torch.ones(1) * 48, torch.ones(1) * 67))
-data = torch.as_tensor(sufficient_statistic(data), dtype=default_dtype)
-data = torch.reshape(data,(1,sample_size))
+p = data / data.sum()
+simulation_object = Gamma_minimax_Problem(estimator=estimator, parameter_constraint_fun=parameter_constraint_fun, b_ub=b_ub, p_init=p, n_distr=1)
 
-Gamma_minimax_est = estimator(data)
-JVHW_est = JVHW_estimator()(data)
+Gamma_minimax_Risk = simulation_object.calc_Risks_tensor(n_sample=20000, distributions=(p,)).item()
+OrlitskySureshWu_Risk = simulation_object.calc_Risks_tensor(n_sample=20000, estimator=OrlitskySureshWu_Estimator(sample_size, new_sample_size), distributions=(p,)).item()
+ShenChaoLin_Risk = simulation_object.calc_Risks_tensor(n_sample=20000, estimator=ShenChaoLin_Estimator(sample_size, new_sample_size), distributions=(p,)).item()

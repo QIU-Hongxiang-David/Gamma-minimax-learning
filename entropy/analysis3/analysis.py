@@ -192,6 +192,7 @@ class Gamma_minimax_Problem(object):
 
     def generate_ps(self, n_distr, p_init=None):
         '''generate a list of n_distr tensors of multinomial probabilities'''
+        global MCMC_Poisson_distribution
         if n_distr == 0:
             return []
         
@@ -208,13 +209,13 @@ class Gamma_minimax_Problem(object):
         i = 0
         while(True):
             #within dimension jump
-            to_prop_dirichlet = torch.distributions.dirichlet.Dirichlet(1e4 * p_init + 1.)
+            to_prop_dirichlet = torch.distributions.dirichlet.Dirichlet(1. * p_init + 1.)
             p_prop = to_prop_dirichlet.sample()
             log_pseudo_prior_prop = self.log_pseudo_prior(p_prop)
             with torch.no_grad():
                 Risk_prop = self.calc_Risks_tensor(n_sample=self.MCMC_MC_size, distributions=(p_prop,))[0]
-            to_init_dirichlet = torch.distributions.dirichlet.Dirichlet(1e4 * p_prop + 1.)
-            ratio = Risk_prop / Risk_init * torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + to_init_dirichlet.log_prob(p_init) - to_prop_dirichlet.log_prob(p_prop))
+            to_init_dirichlet = torch.distributions.dirichlet.Dirichlet(1. * p_prop + 1.)
+            ratio = (Risk_prop / Risk_init) * torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + to_init_dirichlet.log_prob(p_init) - to_prop_dirichlet.log_prob(p_prop))
             if ratio >= 1 or uniform() <= ratio:
                 ps[i] = p_prop
                 p_init = p_prop
@@ -225,11 +226,11 @@ class Gamma_minimax_Problem(object):
                     break
             
             #across dimension jump
-            to_prop_Poisson = torch.distributions.poisson.Poisson(k_init)
-            k_prop = to_prop_Poisson.sample()
-            while k_prop == 0:
-                k_prop = to_prop_Poisson.sample()
-            to_init_Poisson = torch.distributions.poisson.Poisson(k_prop)
+            if k_init==1:
+                k_prop = 2
+            else:
+                k_prop = torch.distributions.bernoulli.Bernoulli(torch.tensor(0.5)).sample().item() * 2 - 1 + k_init
+            
             if k_prop > k_init:
                 flat_dirichlet = torch.distributions.dirichlet.Dirichlet(torch.ones(int(k_prop - k_init + 1)))
                 u = flat_dirichlet.sample()
@@ -237,7 +238,10 @@ class Gamma_minimax_Problem(object):
                 log_pseudo_prior_prop = self.log_pseudo_prior(p_prop)
                 with torch.no_grad():
                     Risk_prop = self.calc_Risks_tensor(n_sample=self.MCMC_MC_size, distributions=(p_prop,))[0]
-                ratio = torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + to_init_Poisson.log_prob(torch.as_tensor(k_init, dtype=default_dtype)) - to_prop_Poisson.log_prob(torch.as_tensor(k_prop, dtype=default_dtype)) + (k_prop - k_init) * torch.log(p_init[-1]) - flat_dirichlet.log_prob(u)) * Risk_prop / Risk_init * (1 - torch.exp(to_prop_Poisson.log_prob(torch.tensor(0.)))) / (1 - torch.exp(to_init_Poisson.log_prob(torch.tensor(0.))))
+                if k_init==1:
+                    ratio = torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + MCMC_Poisson_distribution.log_prob(torch.tensor(k_init, dtype=default_dtype)).item() - MCMC_Poisson_distribution.log_prob(torch.tensor(k_prop, dtype=default_dtype)).item()  - np.log(2.) - flat_dirichlet.log_prob(u)) * (Risk_prop / Risk_init)
+                else:
+                    ratio = torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + MCMC_Poisson_distribution.log_prob(torch.tensor(k_init, dtype=default_dtype)).item() - MCMC_Poisson_distribution.log_prob(torch.tensor(k_prop, dtype=default_dtype)).item() + torch.log(torch.arange(k_init,k_prop)).sum() - flat_dirichlet.log_prob(u)) * (Risk_prop / Risk_init)
                 if ratio >= 1 or uniform() <= ratio:
                     ps[i] = p_prop
                     p_init = p_prop
@@ -254,7 +258,7 @@ class Gamma_minimax_Problem(object):
                 log_pseudo_prior_prop = self.log_pseudo_prior(p_prop)
                 with torch.no_grad():
                     Risk_prop = self.calc_Risks_tensor(n_sample=self.MCMC_MC_size, distributions=(p_prop,))[0]
-                ratio = torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + to_init_Poisson.log_prob(torch.as_tensor(k_init, dtype=default_dtype)) - to_prop_Poisson.log_prob(torch.as_tensor(k_prop, dtype=default_dtype)) + flat_dirichlet.log_prob(u) - (k_init - k_prop) * torch.log(p_prop[-1])) * Risk_prop / Risk_init * (1 - torch.exp(to_prop_Poisson.log_prob(torch.tensor(0.)))) / (1 - torch.exp(to_init_Poisson.log_prob(torch.tensor(0.))))
+                ratio = torch.exp(log_pseudo_prior_prop - log_pseudo_prior_init + MCMC_Poisson_distribution.log_prob(torch.tensor(k_init, dtype=default_dtype)).item() - MCMC_Poisson_distribution.log_prob(torch.tensor(k_prop, dtype=default_dtype)).item() + flat_dirichlet.log_prob(u) + torch.log(torch.arange(k_prop,k_init)).sum()) * (Risk_prop / Risk_init)
                 if ratio >= 1 or uniform() <= ratio:
                     ps[i] = p_prop
                     p_init = p_prop
@@ -518,6 +522,7 @@ b_ub = np.array([-.95, 5.3, -3.7])
 prior_credible_range = torch.tensor([3., 6.])
 MCMC_normal_distribution = torch.distributions.normal.Normal(torch.tensor(pseudo_prior_mean), torch.as_tensor((prior_credible_range[1] - prior_credible_range[0]) * .5 / torch.distributions.normal.Normal(torch.tensor(0.), torch.tensor(1.)).icdf(torch.tensor(.975))))
 MCMC_negbinomial_distribution = torch.distributions.negative_binomial.NegativeBinomial(torch.tensor(2.), torch.tensor(.995))
+MCMC_Poisson_distribution = torch.distributions.poisson.Poisson(torch.tensor(150.))
 
 # initialize grid
 torch.manual_seed(893)
